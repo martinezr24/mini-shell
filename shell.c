@@ -25,10 +25,11 @@ void print_prompt() {
 // signal handler for SIGINT (Ctrl+C) and SIGTSTP (Ctrl+Z)
 void sig_handler(int sig) {
   if (sig == SIGINT) {
-    printf("\nmini-shell terminated");
+    printf("\nmini-shell terminated\n");
     if (fg_pid > 0) kill(fg_pid, SIGINT);
     for (int i = 0; i < bg_count; i++) {
       kill(bg_pids[i], SIGINT);
+      waitpid(bg_pids[i], NULL, 0);
     }
     exit(0); 
   } else if (sig == SIGTSTP) {
@@ -37,6 +38,7 @@ void sig_handler(int sig) {
       kill(fg_pid, SIGTSTP); 
       fg_pid = -1;
     } 
+    printf("\n");
   }
 }
 
