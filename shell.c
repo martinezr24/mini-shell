@@ -199,7 +199,20 @@ void help_func(char **args) {
 
 // built in fg function
 void fg_func(char **args) {
-  return;
+  int index = job_count - 1; 
+  if (args[1]) index = atoi(args[1]) - 1;
+
+  if (index >= 0 && index < job_count) {
+    int pid = jobs[index].pid;
+    printf("Bringing job [%d] %d to foreground\n", index+1, pid);
+    fg_pid = pid;
+    kill(pid, SIGCONT);
+    waitpid(pid, NULL, WUNTRACED);
+
+    for (int i = index; i < job_count-1; i++) jobs[i] = jobs[i+1];
+    job_count--;
+    fg_pid = -1;
+  }
 }
 
 // built in jobs function
