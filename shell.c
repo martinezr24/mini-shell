@@ -95,6 +95,76 @@ void execute_piped_input (char *input) {
   }
 }
 
+void execute_conditional_input(char *input) {
+  char *commands[BUFFER_SIZE];  // store individual commands
+  char *operators[BUFFER_SIZE]; // store operators between commands
+  int num_cmds = 0;
+
+  char *token = strtok(input, " ");
+  char cur_command[BUFFER_SIZE];
+  cur_command[0] = '\0';
+
+  // separate input into commands and operators
+  while (token != NULL) {
+    if (strcmp(token, "&&") == 0 || strcmp(token, "||") == 0 || strcmp(token, ";") == 0) {
+      commands[num_cmds] = strdup(cur_command); // save the command
+      operators[num_cmds] = token; // save the operator
+      num_cmds++;
+      cur_command[0] = '\0';
+    } else {
+      strcat(cur_command, token);
+      strcat(cur_command, " ");
+    }
+    token = strtok(NULL, " ");
+  }
+
+  // save the last command if there is any
+  if (strlen(cur_command) > 0) {
+    commands[num_cmds] = strdup(cur_command);
+    operators[num_cmds] = NULL;
+    num_cmds++;
+  }
+
+  int run_next = 1;
+
+  for (int i = 0; i < num_cmds; i++) {
+    // skip this command if previous condition says not to run
+    if (run_next == 0) {
+      if (operators[i-1] && strcmp(operators[i-1], "&&") == 0) continue;
+      if (operators[i-1] && strcmp(operators[i-1], "||") == 0) continue;
+    }
+
+    // parse the command into arguments
+    char *args[BUFFER_SIZE];
+    int j = 0;
+    char *arg_token = strtok(commands[i], " \t\n");
+    while (arg_token != NULL) {
+        args[j++] = arg_token;
+        arg_token = strtok(NULL, " \t\n");
+    }
+    args[j] = NULL;
+
+    int exit_value = 0;
+    pid_t pid = fork(); 
+    if (pid == 0) {
+      execvp(args[0], args);
+      fprintf(stderr, "exec failed\n");
+      exit(1);
+    } else {
+      int status;
+      waitpid(pid, &status, 0);
+      exit_value = WEXITSTATUS(status);
+    }
+
+    // determine if next command should run based on operator
+    if (operators[i] != NULL) {
+      if (strcmp(operators[i], "&&") == 0) run_next = (exit_value == 0);
+      else if (strcmp(operators[i], "||") == 0) run_next = (exit_value != 0);
+      else run_next = 1;
+    }
+  }
+}
+
 int main(int argc, char** argv){
   alarm(120); // set a timer for 120 seconds to prevent accidental infinite loops or fork bombs
   signal(SIGINT, sig_handler);
@@ -128,6 +198,12 @@ int main(int argc, char** argv){
     int has_pipe = strchr(input, '|') != NULL;
     if (has_pipe) {
       execute_piped_input(input);
+      continue;
+    }
+
+    // check if there is conditional input
+    if (strstr(input, "&&") || strstr(input, "||") || strchr(input, ';')) {
+      execute_conditional_input(input);
       continue;
     }
 
