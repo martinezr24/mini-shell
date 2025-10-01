@@ -5,16 +5,22 @@
 #include <sys/wait.h>
 #include <signal.h>
 
+// struct for jobs 
+struct job {
+  int pid;
+  int state;
+};
+
+// tracking jobs 
+const int MAX_JOBS = 5;
+int job_count = 0;
+struct job jobs[MAX_JOBS];
+
 // max number of characters shell can read from input
 int BUFFER_SIZE = 80;
 
 // pid of the current foreground process
 int fg_pid = -1;
-
-// tracing background processes
-const int MAX_BG = 15;
-int bg_pids[MAX_BG];
-int bg_count = 0;
 
 // function to print the shell prompt
 void print_prompt() {
@@ -27,18 +33,26 @@ void sig_handler(int sig) {
   if (sig == SIGINT) {
     printf("\nmini-shell terminated\n");
     if (fg_pid > 0) kill(fg_pid, SIGINT);
-    for (int i = 0; i < bg_count; i++) {
-      kill(bg_pids[i], SIGINT);
-      waitpid(bg_pids[i], NULL, 0);
+    for (int i = 0; i < job_count; i++) {
+      kill(jobs[i].pid, SIGINT);
+      waitpid(jobs[i].pid, NULL, 0);
     }
     exit(0); 
   } else if (sig == SIGTSTP) {
-    if (bg_count < MAX_BG && fg_pid > 0) bg_pids[bg_count++] = fg_pid;
+
     if (fg_pid > 0) {
-      kill(fg_pid, SIGTSTP); 
+      printf("\nStopping pid %d", fg_pid);
+      kill(fg_pid, SIGTSTP);
+
+      // track the jobs in the background
+      if (job_count < MAX_JOBS) {
+        jobs[job_count].pid = fg_pid;
+        jobs[job_count].state = 1;
+        job_count++;
+      }
       fg_pid = -1;
-    } 
-    printf("\n");
+      printf("\n");
+    }
   }
 }
 
@@ -190,7 +204,10 @@ void fg_func(char **args) {
 
 // built in jobs function
 void jobs_func(char **args) {
-  return;
+  for (int i = 0; i < job_count; i++) {
+    if (jobs[i].state == 0) printf("[%d] %d Running\n", i+1, jobs[i].pid);
+    else if (jobs[i].state == 1) printf("[%d] %d Stopped\n", i+1, jobs[i].pid);
+  }
 }
 
 // built in bg function
@@ -273,8 +290,10 @@ int main(int argc, char** argv){
       exit(1);
     } else if (pid > 0) {
       if (run_in_bg) {
-        if (bg_count < MAX_BG) {
-            bg_pids[bg_count++] = pid;
+        if (job_count < MAX_JOBS) {
+          jobs[job_count].pid = pid;
+          jobs[job_count].state = 0;
+          job_count++;
         }
       } else {
           fg_pid = pid;
