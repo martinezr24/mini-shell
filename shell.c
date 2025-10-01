@@ -42,6 +42,59 @@ void sig_handler(int sig) {
   }
 }
 
+// function that runs when input has a pipe
+void execute_piped_input (char *input) {
+  // splits input by each pipe
+  char *commands[BUFFER_SIZE];
+  int num_cmds = 0;
+  char *cmd = strtok(input, "|");
+  while (cmd != NULL) {
+      commands[num_cmds++] = cmd;
+      cmd = strtok(NULL, "|");
+  }
+
+  // file descriptor
+  int fd[2];
+  int fd_in = 0;
+
+  for (int i = 0; i < num_cmds; i++) {
+    pipe(fd);
+    pid_t pid = fork();
+
+    // child process
+    if (pid == 0) {
+      dup2(fd_in, STDIN_FILENO); // read from fd_in
+      if (i < num_cmds - 1) {
+        dup2(fd[1], STDOUT_FILENO); // write to the next pipe process
+      }
+      
+      close(fd[0]);
+      close(fd[1]);
+
+      // tokenize and execute the command
+      char *args[BUFFER_SIZE];
+      int j = 0;
+      char *token = strtok(commands[i], " \t\n");
+
+      while (token != NULL) {
+        args[j++] = token;
+        token = strtok(NULL, " \t\n");
+      }
+      args[j] = NULL;
+
+      execvp(args[0], args);
+      fprintf(stderr, "exec failed\n");
+      exit(1);
+    } else if (pid > 0) {
+      waitpid(pid, NULL, 0);
+      close(fd[1]);
+      fd_in = fd[0];
+    } else {
+      fprintf(stderr, "fork failed\n");
+    }
+  }
+}
+
 int main(int argc, char** argv){
   alarm(120); // set a timer for 120 seconds to prevent accidental infinite loops or fork bombs
   signal(SIGINT, sig_handler);
@@ -69,6 +122,13 @@ int main(int argc, char** argv){
     if (input[len-1] == '&') {
         run_in_bg = 1;
         input[len-1] = '\0';  
+    }
+
+    // checks if the input has a pipe in it
+    int has_pipe = strchr(input, '|') != NULL;
+    if (has_pipe) {
+      execute_piped_input(input);
+      continue;
     }
 
     char *args[BUFFER_SIZE];
