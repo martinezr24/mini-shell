@@ -205,9 +205,11 @@ void fg_func(char **args) {
   if (index >= 0 && index < job_count) {
     int pid = jobs[index].pid;
     printf("Bringing job [%d] %d to foreground\n", index+1, pid);
+
     fg_pid = pid;
     kill(pid, SIGCONT);
     waitpid(pid, NULL, WUNTRACED);
+    jobs[index].state = 0;
 
     for (int i = index; i < job_count-1; i++) jobs[i] = jobs[i+1];
     job_count--;
@@ -218,6 +220,21 @@ void fg_func(char **args) {
 // built in jobs function
 void jobs_func(char **args) {
   for (int i = 0; i < job_count; i++) {
+    int status;
+    pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
+    
+    if (result > 0) { 
+      printf("Job [%d] %d finished\n", i+1, jobs[i].pid);
+
+      for (int j = i; j < job_count - 1; j++) {
+          jobs[j] = jobs[j+1];
+      }
+      job_count--;
+      i--; 
+    }
+  }
+
+  for (int i = 0; i < job_count; i++) {
     if (jobs[i].state == 0) printf("[%d] %d Running\n", i+1, jobs[i].pid);
     else if (jobs[i].state == 1) printf("[%d] %d Stopped\n", i+1, jobs[i].pid);
   }
@@ -225,7 +242,15 @@ void jobs_func(char **args) {
 
 // built in bg function
 void bg_func(char **args) {
-  return;
+  int index = job_count - 1;
+  if (args[1]) index = atoi(args[1]) - 1;
+
+  if (index >= 0 && index < job_count) {
+    int pid = jobs[index].pid;
+    printf("Resuming job [%d] %d in background\n", index+1, pid);
+    kill(pid, SIGCONT);
+    jobs[index].state = 0;
+  }
 }
 
 // keep track of built ins
@@ -240,6 +265,20 @@ int main(int argc, char** argv){
   
   // buffer to store user input
   char input[BUFFER_SIZE];
+
+  for (int i = 0; i < job_count; i++) {
+    int status;
+    pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
+    if (result > 0) { 
+      printf("Job [%d] %d finished\n", i+1, jobs[i].pid);
+
+      for (int j = i; j < job_count - 1; j++) {
+          jobs[j] = jobs[j+1];
+      }
+      job_count--;
+      i--;
+    }
+  }
 
   while (1) {
     print_prompt();
