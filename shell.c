@@ -95,6 +95,7 @@ void execute_piped_input (char *input) {
   }
 }
 
+// function that runs when there is conditional input
 void execute_conditional_input(char *input) {
   char *commands[BUFFER_SIZE];  // store individual commands
   char *operators[BUFFER_SIZE]; // store operators between commands
@@ -165,6 +166,43 @@ void execute_conditional_input(char *input) {
   }
 }
 
+// built in cd function
+void cd_func(char **args) {
+  char *target_dir = args[1];
+  if (!target_dir) target_dir = getenv("HOME");
+  if (chdir(target_dir) != 0) fprintf(stderr, "cd failed\n");
+}
+
+// built in exit function
+void exit_func(char **args) {
+  exit(0);
+}
+
+// built in help function
+void help_func(char **args) {
+  printf("Built-in commands:\ncd\nexit\nhelp\nfg\njobs\nbg\n");
+}
+
+// built in fg function
+void fg_func(char **args) {
+  return;
+}
+
+// built in jobs function
+void jobs_func(char **args) {
+  return;
+}
+
+// built in bg function
+void bg_func(char **args) {
+  return;
+}
+
+// keep track of built ins
+char *builtins[] = {"cd", "exit", "help", "fg", "jobs", "bg"};
+void (*builtin_funcs[])(char **) = {&cd_func, &exit_func, &help_func, &fg_func, &jobs_func, &bg_func};
+int num_builtins = sizeof(builtins) / sizeof(char *);
+
 int main(int argc, char** argv){
   alarm(120); // set a timer for 120 seconds to prevent accidental infinite loops or fork bombs
   signal(SIGINT, sig_handler);
@@ -183,7 +221,6 @@ int main(int argc, char** argv){
     }
 
     input[strcspn(input, "\n")] = '\0';
-    if (strcmp(input, "exit") == 0) break;
     if (strlen(input) == 0) continue;
 
     // check if command should run in background
@@ -217,21 +254,16 @@ int main(int argc, char** argv){
     }
     args[i] = NULL;
 
-    // handle built-in cd command
-    if (strcmp(args[0], "cd") == 0) {
-      char *target_dir = args[1];
-
-      if (target_dir == NULL) {
-        target_dir = getenv("HOME");
-        if (target_dir == NULL) {
-            fprintf(stderr, "couldn't find a home directory\n");
-            continue;
-        }
+    // checks if a command is built in
+    int built_in = 0;
+    for (int i = 0; i < num_builtins; i++) {
+      if (strcmp(args[0], builtins[i]) == 0) {
+        builtin_funcs[i](args); 
+        built_in = 1;
+        break;
       }
-      if (chdir(target_dir) != 0) fprintf(stderr, "cd failed\n");
-
-      continue;
     }
+    if (built_in) continue;
 
     // create a new process to execute the command
     pid_t pid = fork();
