@@ -180,6 +180,23 @@ void execute_conditional_input(char *input) {
   }
 }
 
+void check_background_jobs() {
+  for (int i = 0; i < job_count; i++) {
+    int status;
+    pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
+
+    if (result > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) { 
+      printf("Job [%d] %d Finished\n", i+1, jobs[i].pid);
+
+      for (int j = i; j < job_count - 1; j++) {
+          jobs[j] = jobs[j+1];
+      }
+      job_count--;
+      i--; 
+    }
+  }
+}
+
 // built in cd function
 void cd_func(char **args) {
   char *target_dir = args[1];
@@ -204,7 +221,7 @@ void fg_func(char **args) {
 
   if (index >= 0 && index < job_count) {
     int pid = jobs[index].pid;
-    printf("Bringing job [%d] %d to foreground\n", index+1, pid);
+    printf("Bringing Job [%d] %d to Foreground\n", index+1, pid);
 
     fg_pid = pid;
     kill(pid, SIGCONT);
@@ -219,24 +236,13 @@ void fg_func(char **args) {
 
 // built in jobs function
 void jobs_func(char **args) {
-  for (int i = 0; i < job_count; i++) {
-    int status;
-    pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
-    
-    if (result > 0) { 
-      printf("Job [%d] %d finished\n", i+1, jobs[i].pid);
+  // check if any background processes have finished
+  check_background_jobs();
 
-      for (int j = i; j < job_count - 1; j++) {
-          jobs[j] = jobs[j+1];
-      }
-      job_count--;
-      i--; 
-    }
-  }
-
+  // print out the jobs
   for (int i = 0; i < job_count; i++) {
-    if (jobs[i].state == 0) printf("[%d] %d Running\n", i+1, jobs[i].pid);
-    else if (jobs[i].state == 1) printf("[%d] %d Stopped\n", i+1, jobs[i].pid);
+    if (jobs[i].state == 0) printf("Job [%d] %d Running\n", i+1, jobs[i].pid);
+    else if (jobs[i].state == 1) printf("Job [%d] %d Stopped\n", i+1, jobs[i].pid);
   }
 }
 
@@ -247,7 +253,7 @@ void bg_func(char **args) {
 
   if (index >= 0 && index < job_count) {
     int pid = jobs[index].pid;
-    printf("Resuming job [%d] %d in background\n", index+1, pid);
+    printf("Resuming Job [%d] %d in Background\n", index+1, pid);
     kill(pid, SIGCONT);
     jobs[index].state = 0;
   }
@@ -266,18 +272,8 @@ int main(int argc, char** argv){
   // buffer to store user input
   char input[BUFFER_SIZE];
 
-  for (int i = 0; i < job_count; i++) {
-    int status;
-    pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
-    if (result > 0) { 
-      printf("Job [%d] %d finished\n", i+1, jobs[i].pid);
-
-      for (int j = i; j < job_count - 1; j++) {
-          jobs[j] = jobs[j+1];
-      }
-      job_count--;
-      i--;
-    }
+  while (1) {
+    check_background_jobs();
   }
 
   while (1) {
