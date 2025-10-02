@@ -9,6 +9,7 @@
 struct job {
   int pid;
   int state;
+  char *cmd;
 };
 
 // tracking jobs 
@@ -16,11 +17,19 @@ const int MAX_JOBS = 5;
 int job_count = 0;
 struct job jobs[MAX_JOBS];
 
+// track history of commands
+const int MAX_HISTORY = 100;
+char *history[MAX_HISTORY];
+int history_count = 0;
+
 // max number of characters shell can read from input
-int BUFFER_SIZE = 80;
+const int BUFFER_SIZE = 80;
 
 // pid of the current foreground process
 int fg_pid = -1;
+
+// track current command
+char current_cmd[BUFFER_SIZE];
 
 // function to print the shell prompt
 void print_prompt() {
@@ -31,7 +40,7 @@ void print_prompt() {
 // signal handler for SIGINT (Ctrl+C) and SIGTSTP (Ctrl+Z)
 void sig_handler(int sig) {
   if (sig == SIGINT) {
-    printf("\nmini-shell terminated\n");
+    printf("\nmini-shell terminated");
     if (fg_pid > 0) kill(fg_pid, SIGINT);
     for (int i = 0; i < job_count; i++) {
       kill(jobs[i].pid, SIGINT);
@@ -41,18 +50,22 @@ void sig_handler(int sig) {
   } else if (sig == SIGTSTP) {
 
     if (fg_pid > 0) {
-      printf("\nStopping pid %d", fg_pid);
       kill(fg_pid, SIGTSTP);
 
-      // track the jobs in the background
+      // track jobs in the background
       if (job_count < MAX_JOBS) {
         jobs[job_count].pid = fg_pid;
-        jobs[job_count].state = 1;
+        jobs[job_count].state = 1; 
+        jobs[job_count].cmd = strdup(current_cmd); 
+        printf("\nsuspended   %s   (%d)", jobs[job_count].cmd, fg_pid);
         job_count++;
+      } else {
+        printf("\nsuspended   %d   but job table full", fg_pid);
       }
-      fg_pid = -1;
-      printf("\n");
     }
+    fg_pid = -1;
+    printf("\n");
+
   }
 }
 
@@ -180,13 +193,15 @@ void execute_conditional_input(char *input) {
   }
 }
 
+// function to check if background jobs have completed
 void check_background_jobs() {
   for (int i = 0; i < job_count; i++) {
     int status;
     pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
 
     if (result > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) { 
-      printf("Job [%d] %d Finished\n", i+1, jobs[i].pid);
+      printf("[%d]   done   %s   (%d)\n", i+1, jobs[i].cmd, jobs[i].pid);
+      free(jobs[i].cmd);
 
       for (int j = i; j < job_count - 1; j++) {
           jobs[j] = jobs[j+1];
@@ -195,6 +210,12 @@ void check_background_jobs() {
       i--; 
     }
   }
+}
+
+// adds a command to history of commands
+void add_to_history(const char *cmd) {
+  if (history_count < MAX_HISTORY)
+      history[history_count++] = strdup(cmd);
 }
 
 // built in cd function
@@ -221,7 +242,7 @@ void fg_func(char **args) {
 
   if (index >= 0 && index < job_count) {
     int pid = jobs[index].pid;
-    printf("Bringing Job [%d] %d to Foreground\n", index+1, pid);
+    printf("[%d]   running   %s   (%d)\n", index+1, jobs[index].cmd, pid);
 
     fg_pid = pid;
     kill(pid, SIGCONT);
@@ -236,13 +257,12 @@ void fg_func(char **args) {
 
 // built in jobs function
 void jobs_func(char **args) {
-  // check if any background processes have finished
   check_background_jobs();
 
   // print out the jobs
   for (int i = 0; i < job_count; i++) {
-    if (jobs[i].state == 0) printf("Job [%d] %d Running\n", i+1, jobs[i].pid);
-    else if (jobs[i].state == 1) printf("Job [%d] %d Stopped\n", i+1, jobs[i].pid);
+    if (jobs[i].state == 0) printf("[%d]   running   %s   (%d)\n", i+1, jobs[i].cmd, jobs[i].pid);
+    else if (jobs[i].state == 1) printf("[%d]   suspended   %s   (%d)\n", i+1, jobs[i].cmd, jobs[i].pid);
   }
 }
 
@@ -253,15 +273,22 @@ void bg_func(char **args) {
 
   if (index >= 0 && index < job_count) {
     int pid = jobs[index].pid;
-    printf("Resuming Job [%d] %d in Background\n", index+1, pid);
+    printf("[%d]   continued   %s   (%d)\n", index+1, jobs[index].cmd, pid);
     kill(pid, SIGCONT);
     jobs[index].state = 0;
   }
 }
 
+// built in function that prints the past commands
+void history_func(char **args) {
+  for (int i = 0; i < history_count; i++) {
+      printf("[%d] %s\n", i + 1, history[i]);
+  }
+}
+
 // keep track of built ins
-char *builtins[] = {"cd", "exit", "help", "fg", "jobs", "bg"};
-void (*builtin_funcs[])(char **) = {&cd_func, &exit_func, &help_func, &fg_func, &jobs_func, &bg_func};
+char *builtins[] = {"cd", "exit", "help", "fg", "jobs", "bg", "history"};
+void (*builtin_funcs[])(char **) = {&cd_func, &exit_func, &help_func, &fg_func, &jobs_func, &bg_func, &history_func};
 int num_builtins = sizeof(builtins) / sizeof(char *);
 
 int main(int argc, char** argv){
@@ -274,9 +301,6 @@ int main(int argc, char** argv){
 
   while (1) {
     check_background_jobs();
-  }
-
-  while (1) {
     print_prompt();
 
     // read input from user
@@ -288,13 +312,23 @@ int main(int argc, char** argv){
     input[strcspn(input, "\n")] = '\0';
     if (strlen(input) == 0) continue;
 
+    // get the current command
+    strncpy(current_cmd, input, sizeof(current_cmd)-1);
+    current_cmd[sizeof(current_cmd)-1] = '\0';
+
+    add_to_history(input);
+
     // check if command should run in background
     int run_in_bg = 0;
     int len = strlen(input);
-    if (input[len-1] == '&') {
-        run_in_bg = 1;
-        input[len-1] = '\0';  
+
+    // removes the & from a background command
+    while (len > 0 && (input[len-1] == '&' || input[len-1] == ' ')) {
+      if (input[len-1] == '&') run_in_bg = 1;
+      input[--len] = '\0'; 
     }
+    strncpy(current_cmd, input, sizeof(current_cmd)-1);
+    current_cmd[sizeof(current_cmd)-1] = '\0';
 
     // checks if the input has a pipe in it
     int has_pipe = strchr(input, '|') != NULL;
@@ -341,6 +375,7 @@ int main(int argc, char** argv){
         if (job_count < MAX_JOBS) {
           jobs[job_count].pid = pid;
           jobs[job_count].state = 0;
+          jobs[job_count].cmd = strdup(current_cmd);
           job_count++;
         }
       } else {
