@@ -5,6 +5,20 @@
 #include <sys/wait.h>
 #include <signal.h>
 
+// function declarations
+void cd_func(char **args);
+void exit_func(char **args);
+void help_func(char **args);
+void fg_func(char **args);
+void jobs_func(char **args);
+void bg_func(char **args);
+void history_func(char **args);
+
+// keep track of built ins
+char *builtins[] = {"cd", "exit", "help", "fg", "jobs", "bg", "history"};
+void (*builtin_funcs[])(char **) = {&cd_func, &exit_func, &help_func, &fg_func, &jobs_func, &bg_func, &history_func};
+int num_builtins = sizeof(builtins) / sizeof(char *);
+
 // struct for jobs 
 struct job {
   int pid;
@@ -49,40 +63,42 @@ void sig_handler(int sig) {
     exit(0); 
   } else if (sig == SIGTSTP) {
 
-    if (fg_pid > 0) {
-      kill(fg_pid, SIGTSTP);
+    if (fg_pid <= 0) {
+      printf("\n");
+      print_prompt();
+      return;
+    }
 
-      // track jobs in the background
-      if (job_count < MAX_JOBS) {
+    kill(fg_pid, SIGTSTP);
+
+    if (job_count < MAX_JOBS) {
         jobs[job_count].pid = fg_pid;
         jobs[job_count].state = 1; 
-        jobs[job_count].cmd = strdup(current_cmd); 
-        printf("\nsuspended   %s   (%d)", jobs[job_count].cmd, fg_pid);
+        jobs[job_count].cmd = strdup(current_cmd);
+        printf("\nsuspended   %s   (%d)\n", jobs[job_count].cmd, fg_pid);
         job_count++;
-      } else {
-        printf("\nsuspended   %d   but job table full", fg_pid);
-      }
+    } else {
+        printf("\nsuspended   %d   but job table full\n", fg_pid);
     }
     fg_pid = -1;
-    printf("\n");
-
   }
 }
 
 // function that runs when input has a pipe
-void execute_piped_input (char *input) {
+int execute_piped_input (char *input, int return_status) {
   // splits input by each pipe
   char *commands[BUFFER_SIZE];
   int num_cmds = 0;
   char *cmd = strtok(input, "|");
   while (cmd != NULL) {
-      commands[num_cmds++] = cmd;
-      cmd = strtok(NULL, "|");
+    commands[num_cmds++] = cmd;
+    cmd = strtok(NULL, "|");
   }
 
   // file descriptor
   int fd[2];
   int fd_in = 0;
+  pid_t last_pid = -1;
 
   for (int i = 0; i < num_cmds; i++) {
     pipe(fd);
@@ -125,99 +141,136 @@ void execute_piped_input (char *input) {
       execvp(args[0], args);
       fprintf(stderr, "exec failed\n");
       exit(1);
-    } else if (pid > 0) {
-      waitpid(pid, NULL, 0);
-      close(fd[1]);
-      fd_in = fd[0];
     } else {
-      fprintf(stderr, "fork failed\n");
+        close(fd[1]);
+        if (fd_in != 0) close(fd_in);
+        fd_in = fd[0];
+        last_pid = pid;
+      }
     }
-  }
+
+    int status = 0;
+    if (last_pid > 0) {
+      waitpid(last_pid, &status, 0);
+    }
+  
+    if (return_status) {
+      return WEXITSTATUS(status);
+    } else {
+      return 0;
+    }
 }
 
-// function that runs when there is conditional input
-void execute_conditional_input(char *input) {
-  char *commands[BUFFER_SIZE];  // store individual commands
-  char *operators[BUFFER_SIZE]; // store operators between commands
-  int num_cmds = 0;
+// function that executes a single command
+int execute_single_command(char *cmd) {
+  // trim leading whitespace
+  while (*cmd == ' ') cmd++;
+  char *end = cmd + strlen(cmd) - 1;
 
-  char *token = strtok(input, " ");
-  char cur_command[BUFFER_SIZE];
-  cur_command[0] = '\0';
+  // trim trailing whitespace
+  while (end > cmd && *end == ' ') *end-- = '\0';
+  if (strlen(cmd) == 0) return 0;
 
-  // separate input into commands and operators
-  while (token != NULL) {
-    if (strcmp(token, "&&") == 0 || strcmp(token, "||") == 0 || strcmp(token, ";") == 0) {
-      commands[num_cmds] = strdup(cur_command); // save the command
-      operators[num_cmds] = token; // save the operator
-      num_cmds++;
-      cur_command[0] = '\0';
-    } else {
-      strcat(cur_command, token);
-      strcat(cur_command, " ");
-    }
-    token = strtok(NULL, " ");
+  // check if contains a pipe
+  if (strchr(cmd, '|')) {
+    return execute_piped_input(cmd, 1);
   }
 
-  // save the last command if there is any
-  if (strlen(cur_command) > 0) {
-    commands[num_cmds] = strdup(cur_command);
-    operators[num_cmds] = NULL;
-    num_cmds++;
-  }
+  // parse the command into arguments
+  char *args[BUFFER_SIZE];
+  int j = 0;
+  char *p = cmd;
+  while (*p) {
+      // skip spaces between arguments
+      while (*p == ' ') p++;
+      if (!*p) break;
 
-  int run_next = 1;
-
-  for (int i = 0; i < num_cmds; i++) {
-    // skip this command if previous condition says not to run
-    if (run_next == 0) {
-      if (operators[i-1] && strcmp(operators[i-1], "&&") == 0) continue;
-      if (operators[i-1] && strcmp(operators[i-1], "||") == 0) continue;
-    }
-
-    // parse the command into arguments
-    char *args[BUFFER_SIZE];
-    int j = 0;
-    char *p = commands[i];
-
-    while (*p != '\0') {
-      while (*p == ' ') p++; 
-      if (*p == '\0') break;
-
+      // handle quote
       char *start;
       if (*p == '"' || *p == '\'') {
           char quote = *p++;
           start = p;
           while (*p && *p != quote) p++;
-          if (*p) *p++ = '\0';  
+          if (*p) *p++ = '\0';
       } else {
           start = p;
           while (*p && *p != ' ') p++;
           if (*p) *p++ = '\0';
       }
       args[j++] = start;
-    }
-    args[j] = NULL;
+  }
+  args[j] = NULL;
 
-    int exit_value = 0;
-    pid_t pid = fork(); 
-    if (pid == 0) {
+  for (int i = 0; i < num_builtins; i++) {
+      if (strcmp(args[0], builtins[i]) == 0) {
+          builtin_funcs[i](args);
+          return 0;
+      }
+  }
+
+  // execute commands
+  pid_t pid = fork();
+  int status = 0;
+  if (pid == 0) {
       execvp(args[0], args);
       fprintf(stderr, "exec failed\n");
       exit(1);
-    } else {
-      int status;
-      waitpid(pid, &status, 0);
-      exit_value = WEXITSTATUS(status);
-    }
+  } else if (pid > 0) {
+      fg_pid = pid;
+      waitpid(pid, &status, WUNTRACED);
+      fg_pid = -1;
+      return WEXITSTATUS(status);
+  } else {
+      fprintf(stderr, "fork failed\n");
+      return 1;
+  }
+}
 
-    // determine if next command should run based on operator
-    if (operators[i] != NULL) {
-      if (strcmp(operators[i], "&&") == 0) run_next = (exit_value == 0);
-      else if (strcmp(operators[i], "||") == 0) run_next = (exit_value != 0);
-      else run_next = 1;
+// recursive function to parse the command input
+int execute_recursive(char *input) {
+  char buf[BUFFER_SIZE];
+  strncpy(buf, input, BUFFER_SIZE);
+  buf[BUFFER_SIZE-1] = '\0';
+
+  // trim leading whitespace
+  char *ptr = buf;
+  while (*ptr == ' ') ptr++;
+
+  // trim trailing whitespace
+  char *end = buf + strlen(buf) - 1;
+  while (end > buf && *end == ' ') *end-- = '\0';
+
+  if (strlen(buf) == 0) return 0;
+
+  // check for semicolons
+  char *semicolon = strchr(buf, ';');
+  if (semicolon) {
+    *semicolon = '\0';
+    execute_recursive(buf);
+    return execute_recursive(semicolon + 1);
+  }
+
+  // check for logical && or ||
+  char *op = NULL;
+  int is_and = 1;
+  for (char *s = buf; *s; s++) {
+    if (strncmp(s, "&&", 2) == 0) { op = s; is_and = 1; break; }
+    if (strncmp(s, "||", 2) == 0) { op = s; is_and = 0; break; }
+  }
+
+  // if && or || is found, split and evaluate recursively
+  if (op) {
+    *op = '\0';
+    int left_status = execute_recursive(buf);
+    if ((is_and && left_status == 0) || (!is_and && left_status != 0)) {
+        return execute_recursive(op + 2);
+    } else {
+        return left_status;
     }
   }
+
+  // base case: no ||, &&, or ; - execute single command
+  return execute_single_command(buf);
 }
 
 // function to check if background jobs have completed
@@ -313,11 +366,6 @@ void history_func(char **args) {
   }
 }
 
-// keep track of built ins
-char *builtins[] = {"cd", "exit", "help", "fg", "jobs", "bg", "history"};
-void (*builtin_funcs[])(char **) = {&cd_func, &exit_func, &help_func, &fg_func, &jobs_func, &bg_func, &history_func};
-int num_builtins = sizeof(builtins) / sizeof(char *);
-
 int main(int argc, char** argv){
   alarm(120); // set a timer for 120 seconds to prevent accidental infinite loops or fork bombs
   signal(SIGINT, sig_handler);
@@ -357,78 +405,28 @@ int main(int argc, char** argv){
     strncpy(current_cmd, input, sizeof(current_cmd)-1);
     current_cmd[sizeof(current_cmd)-1] = '\0';
 
-    // checks if the input has a pipe in it
-    int has_pipe = strchr(input, '|') != NULL;
-    if (has_pipe) {
-      execute_piped_input(input);
-      continue;
-    }
-
-    // check if there is conditional input
-    if (strstr(input, "&&") || strstr(input, "||") || strchr(input, ';')) {
-      execute_conditional_input(input);
-      continue;
-    }
-
-    // reads input
-    char *args[BUFFER_SIZE];
-    int j = 0;
-    char *p = input;
-
-    while (*p != '\0') {
-        while (*p == ' ') p++; 
-        if (*p == '\0') break;
-
-        char *start;
-        if (*p == '"' || *p == '\'') {
-            char quote = *p++;
-            start = p;
-            while (*p && *p != quote) p++;
-            if (*p) *p++ = '\0';  
-        } else {
-            start = p;
-            while (*p && *p != ' ') p++;
-            if (*p) *p++ = '\0';
-        }
-        args[j++] = start;
-    }
-    args[j] = NULL;
-
-    // checks if a command is built in
-    int built_in = 0;
-    for (int i = 0; i < num_builtins; i++) {
-      if (strcmp(args[0], builtins[i]) == 0) {
-        builtin_funcs[i](args); 
-        built_in = 1;
-        break;
+    // execute the commands
+    if (run_in_bg) {
+      pid_t pid = fork();
+      if (pid == 0) {
+        execute_recursive(input);
+        exit(0);
+      } else if (pid > 0) {
+          if (job_count < MAX_JOBS) {
+            jobs[job_count].pid = pid;
+            jobs[job_count].state = 0;
+            jobs[job_count].cmd = strdup(current_cmd);
+            job_count++;
+          } else {
+            printf("Job table full, cannot run in background\n");
+          }
+      } else {
+        fprintf(stderr, "fork failed\n");
+      }
+      } else {
+        execute_recursive(input);
       }
     }
-    if (built_in) continue;
 
-    // create a new process to execute the command
-    pid_t pid = fork();
-    if (pid == 0) {
-      execvp(args[0], args);
-      fprintf(stderr, "exec failed\n");
-      exit(1);
-    } else if (pid > 0) {
-      if (run_in_bg) {
-        if (job_count < MAX_JOBS) {
-          jobs[job_count].pid = pid;
-          jobs[job_count].state = 0;
-          jobs[job_count].cmd = strdup(current_cmd);
-          job_count++;
-        }
-      } else {
-          fg_pid = pid;
-          int status;
-          waitpid(pid, &status, WUNTRACED);
-          fg_pid = -1;
-      } 
-    } else {
-      fprintf(stderr, "fork failed\n");
-    }
-  }
- 
-  return 0;
+    return 0;
 }
