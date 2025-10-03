@@ -98,14 +98,27 @@ void execute_piped_input (char *input) {
       close(fd[0]);
       close(fd[1]);
 
-      // tokenize and execute the command
+      // parse and execute the command
       char *args[BUFFER_SIZE];
       int j = 0;
-      char *token = strtok(commands[i], " \t\n");
+      char *p = commands[i];
 
-      while (token != NULL) {
-        args[j++] = token;
-        token = strtok(NULL, " \t\n");
+      while (*p != '\0') {
+        while (*p == ' ') p++; 
+        if (*p == '\0') break;
+
+        char *start;
+        if (*p == '"' || *p == '\'') {
+            char quote = *p++;
+            start = p;
+            while (*p && *p != quote) p++;
+            if (*p) *p++ = '\0';  
+        } else {
+            start = p;
+            while (*p && *p != ' ') p++;
+            if (*p) *p++ = '\0';
+        }
+        args[j++] = start;
       }
       args[j] = NULL;
 
@@ -165,10 +178,24 @@ void execute_conditional_input(char *input) {
     // parse the command into arguments
     char *args[BUFFER_SIZE];
     int j = 0;
-    char *arg_token = strtok(commands[i], " \t\n");
-    while (arg_token != NULL) {
-        args[j++] = arg_token;
-        arg_token = strtok(NULL, " \t\n");
+    char *p = commands[i];
+
+    while (*p != '\0') {
+      while (*p == ' ') p++; 
+      if (*p == '\0') break;
+
+      char *start;
+      if (*p == '"' || *p == '\'') {
+          char quote = *p++;
+          start = p;
+          while (*p && *p != quote) p++;
+          if (*p) *p++ = '\0';  
+      } else {
+          start = p;
+          while (*p && *p != ' ') p++;
+          if (*p) *p++ = '\0';
+      }
+      args[j++] = start;
     }
     args[j] = NULL;
 
@@ -343,15 +370,29 @@ int main(int argc, char** argv){
       continue;
     }
 
+    // reads input
     char *args[BUFFER_SIZE];
-    int i = 0;
-    char *token = strtok(input, " ");
+    int j = 0;
+    char *p = input;
 
-    while (token != NULL) {
-        args[i++] = token;
-        token = strtok(NULL, " ");
+    while (*p != '\0') {
+        while (*p == ' ') p++; 
+        if (*p == '\0') break;
+
+        char *start;
+        if (*p == '"' || *p == '\'') {
+            char quote = *p++;
+            start = p;
+            while (*p && *p != quote) p++;
+            if (*p) *p++ = '\0';  
+        } else {
+            start = p;
+            while (*p && *p != ' ') p++;
+            if (*p) *p++ = '\0';
+        }
+        args[j++] = start;
     }
-    args[i] = NULL;
+    args[j] = NULL;
 
     // checks if a command is built in
     int built_in = 0;
